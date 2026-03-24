@@ -11,9 +11,14 @@ Bagimlilik: pymupdf (pip install pymupdf)
 """
 
 import os
+import sys
+import webbrowser
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk, scrolledtext
 import threading
+
+APP_VERSION = "1.1.0"
+GITHUB_URL  = "https://github.com/SerkanC1/pdf-ara"
 
 try:
     import fitz  # PyMuPDF
@@ -45,7 +50,52 @@ class PdfAraApp(tk.Tk):
         self._search_thread: threading.Thread | None = None
         self._cancel_event = threading.Event()
 
+        self._load_icon()
+        self._build_menubar()
         self._build_ui()
+
+    # ------------------------------------------------------------------
+    # İkon
+    # ------------------------------------------------------------------
+    def _load_icon(self):
+        """Pencere simgesini assets/favicon.ico'dan yükler."""
+        ico_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "assets", "favicon.ico")
+        # PyInstaller --onefile: dosyalar sys._MEIPASS altında
+        if not os.path.exists(ico_path) and hasattr(sys, "_MEIPASS"):
+            ico_path = os.path.join(sys._MEIPASS, "assets", "favicon.ico")
+        if os.path.exists(ico_path):
+            try:
+                self.iconbitmap(ico_path)
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------------
+    # Menü Çubuğu
+    # ------------------------------------------------------------------
+    def _build_menubar(self):
+        menubar = tk.Menu(self)
+
+        # ── Dosya ──────────────────────────────────────────────────────
+        menu_file = tk.Menu(menubar, tearoff=0)
+        menu_file.add_command(label="Klasör Seç…", accelerator="Ctrl+O",
+                              command=self._choose_folder)
+        menu_file.add_separator()
+        menu_file.add_command(label="Çıkış", accelerator="Alt+F4",
+                              command=self.destroy)
+        menubar.add_cascade(label="Dosya", menu=menu_file)
+        self.bind("<Control-o>", lambda e: self._choose_folder())
+
+        # ── Yardım ─────────────────────────────────────────────────────
+        menu_help = tk.Menu(menubar, tearoff=0)
+        menu_help.add_command(label="Kullanım Kılavuzu", accelerator="F1",
+                              command=self._show_help)
+        menu_help.add_separator()
+        menu_help.add_command(label="Hakkında", command=self._show_about)
+        menubar.add_cascade(label="Yardım", menu=menu_help)
+        self.bind("<F1>", lambda e: self._show_help())
+
+        self.config(menu=menubar)
 
     # ------------------------------------------------------------------
     # UI İnşa
@@ -327,6 +377,108 @@ class PdfAraApp(tk.Tk):
         self.progress["value"] = done
         self.status_var.set(msg)
         self._set_searching_state(False)
+
+    # ------------------------------------------------------------------
+    # Yardım Penceresi
+    # ------------------------------------------------------------------
+    def _show_help(self):
+        win = tk.Toplevel(self)
+        win.title("Kullanım Kılavuzu")
+        win.geometry("480x380")
+        win.resizable(False, False)
+        win.grab_set()
+        win.configure(bg=ROOT_BG)
+
+        tk.Label(win, text="Kullanım Kılavuzu",
+                 font=("Segoe UI", 13, "bold"), bg=ROOT_BG, fg=ACCENT
+                 ).pack(anchor="w", padx=16, pady=(14, 6))
+
+        help_text = (
+            "1.  KLASÖR SEÇ\n"
+            "    Taramak istediğiniz klasörü seçin.\n"
+            "    Alt klasörler taranmaz; yalnızca seçilen klasör.\n\n"
+            "2.  ARAMA TERİMLERİ\n"
+            "    Her kutuya bir arama terimi yazın.\n"
+            "    Boş bırakılan kutular dikkate alınmaz.\n"
+            "    Tüm dolu kutulardaki terimler PDF'de bulunmalıdır\n"
+            "    (AND mantığı). Büyük/küçük harf fark etmez.\n\n"
+            "3.  ARA\n"
+            "    'Ara' butonuna basın veya Enter tuşuna basın.\n\n"
+            "4.  DURDUR\n"
+            "    Arama sırasında 'Durdur' butonuna basın\n"
+            "    veya Escape tuşunu kullanın.\n\n"
+            "5.  SONUÇLARI AÇ\n"
+            "    Eşleşen bir PDF'e çift tıklayın.\n"
+            "    Windows'un varsayılan PDF uygulaması açılır.\n"
+        )
+        txt = scrolledtext.ScrolledText(
+            win, font=("Segoe UI", 10), bg="#ffffff", relief="flat",
+            wrap="word", padx=10, pady=8, state="normal"
+        )
+        txt.insert("1.0", help_text)
+        txt.config(state="disabled")
+        txt.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+
+        tk.Button(win, text="Kapat", command=win.destroy,
+                  bg=ACCENT, fg=BTN_FG, font=("Segoe UI", 9, "bold"),
+                  relief="flat", padx=16, pady=4, cursor="hand2"
+                  ).pack(pady=(0, 12))
+        win.bind("<Escape>", lambda e: win.destroy())
+
+    # ------------------------------------------------------------------
+    # Hakkında Penceresi
+    # ------------------------------------------------------------------
+    def _show_about(self):
+        win = tk.Toplevel(self)
+        win.title("Hakkında")
+        win.geometry("380x280")
+        win.resizable(False, False)
+        win.grab_set()
+        win.configure(bg=ROOT_BG)
+
+        tk.Label(win, text="PDF-Ara",
+                 font=("Segoe UI", 18, "bold"), bg=ROOT_BG, fg=ACCENT
+                 ).pack(pady=(20, 0))
+        tk.Label(win, text=f"Sürüm {APP_VERSION}",
+                 font=("Segoe UI", 9), bg=ROOT_BG, fg="#666"
+                 ).pack()
+        tk.Label(win,
+                 text="PDF dosyalarında çoklu metin araması.",
+                 font=("Segoe UI", 10), bg=ROOT_BG
+                 ).pack(pady=(10, 0))
+
+        tk.Frame(win, bg="#d0d0d0", height=1
+                 ).pack(fill="x", padx=24, pady=12)
+
+        info_frame = tk.Frame(win, bg=ROOT_BG)
+        info_frame.pack()
+        rows = [
+            ("Geliştirici:", "Serkan Canbaz"),
+            ("Lisans:",      "MIT"),
+            ("Kütüphaneler:", "PyMuPDF · PyInstaller · Pillow"),
+            ("Python:",      sys.version.split()[0]),
+        ]
+        for label, value in rows:
+            tk.Label(info_frame, text=label, font=("Segoe UI", 9, "bold"),
+                     bg=ROOT_BG, anchor="e", width=14).grid(
+                         row=rows.index((label, value)), column=0,
+                         sticky="e", padx=(0, 6), pady=2)
+            tk.Label(info_frame, text=value, font=("Segoe UI", 9),
+                     bg=ROOT_BG, anchor="w").grid(
+                         row=rows.index((label, value)), column=1,
+                         sticky="w", pady=2)
+
+        link = tk.Label(win, text=GITHUB_URL,
+                        font=("Segoe UI", 9, "underline"),
+                        bg=ROOT_BG, fg=ACCENT, cursor="hand2")
+        link.pack(pady=(10, 0))
+        link.bind("<Button-1>", lambda e: webbrowser.open(GITHUB_URL))
+
+        tk.Button(win, text="Kapat", command=win.destroy,
+                  bg=ACCENT, fg=BTN_FG, font=("Segoe UI", 9, "bold"),
+                  relief="flat", padx=16, pady=4, cursor="hand2"
+                  ).pack(pady=12)
+        win.bind("<Escape>", lambda e: win.destroy())
 
     # ------------------------------------------------------------------
     # Dosya Açma
