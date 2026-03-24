@@ -12,7 +12,7 @@ Bagimlilik: pymupdf (pip install pymupdf)
 
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import threading
 
 try:
@@ -43,6 +43,7 @@ class PdfAraApp(tk.Tk):
         self.term_entries: list[tk.Entry] = []
         self.result_files: list[str] = []
         self._search_thread: threading.Thread | None = None
+        self._cancel_event = threading.Event()
 
         self._build_ui()
 
@@ -77,11 +78,12 @@ class PdfAraApp(tk.Tk):
             readonlybackground="#e8e8e8"
         ).pack(side="left", fill="x", expand=True, padx=(0, 8))
 
-        tk.Button(
+        self.btn_folder = tk.Button(
             frm_folder, text="Klasör Seç", command=self._choose_folder,
             bg=ACCENT, fg=BTN_FG, font=("Segoe UI", 9, "bold"),
             relief="flat", padx=10, cursor="hand2"
-        ).pack(side="left")
+        )
+        self.btn_folder.pack(side="left")
 
         tk.Frame(self, bg="#d0d0d0", height=1).pack(fill="x", padx=12)
 
@@ -120,21 +122,27 @@ class PdfAraApp(tk.Tk):
 
         tk.Frame(self, bg="#d0d0d0", height=1).pack(fill="x", padx=12)
 
-        # ── Ara Butonu ──────────────────────────────────────────────────
+        # ── Ara / Durdur Butonu ──────────────────────────────────────────
         self.btn_search = tk.Button(
-            self, text="🔍  Ara", command=self._start_search,
+            self, text="🔍  Ara", command=self._on_search_button,
             bg=ACCENT, fg=BTN_FG, font=("Segoe UI", 11, "bold"),
             relief="flat", padx=20, pady=6, cursor="hand2"
         )
         self.btn_search.pack(pady=8)
 
+        # ── İlerleme Çubuğu ─────────────────────────────────────────────
+        self.progress = ttk.Progressbar(
+            self, orient="horizontal", mode="determinate"
+        )
+        self.progress.pack(fill="x", padx=12, pady=(0, 4))
+
         # ── Durum etiketi ────────────────────────────────────────────────
         self.status_var = tk.StringVar(value="")
         self.lbl_status = tk.Label(
             self, textvariable=self.status_var,
-            font=("Segoe UI", 9), bg=ROOT_BG, fg="#444"
+            font=("Segoe UI", 9), bg=ROOT_BG, fg="#444", anchor="w"
         )
-        self.lbl_status.pack(anchor="w", padx=12)
+        self.lbl_status.pack(fill="x", padx=12)
 
         # ── Sonuç Listesi ────────────────────────────────────────────────
         frm_list = tk.Frame(self, bg=ROOT_BG)
@@ -154,8 +162,9 @@ class PdfAraApp(tk.Tk):
 
         self.listbox.bind("<Double-Button-1>", self._open_file)
 
-        # Enter ile de arama yapılabilsin
-        self.bind("<Return>", lambda e: self._start_search())
+        # Enter ile arama, Escape ile durdurma
+        self.bind("<Return>", lambda e: self._on_search_button())
+        self.bind("<Escape>", lambda e: self._request_cancel())
 
     # ------------------------------------------------------------------
     # Yardımcı Metotlar
@@ -179,6 +188,23 @@ class PdfAraApp(tk.Tk):
         for e in self.term_entries:
             e.delete(0, tk.END)
 
+    def _set_searching_state(self, searching: bool):
+        """UI'yi arama / bekleme moduna alır."""
+        if searching:
+            self.btn_search.config(text="⏹  Durdur", bg="#c0392b",
+                                   command=self._request_cancel)
+            self.btn_folder.config(state="disabled")
+        else:
+            self.btn_search.config(text="🔍  Ara", bg=ACCENT,
+                                   command=self._on_search_button)
+            self.btn_folder.config(state="normal")
+
+    def _request_cancel(self):
+        """Kullanıcı Durdur'a bastı — iptal bayrağını set et."""
+        if self._search_thread and self._search_thread.is_alive():
+            self._cancel_event.set()
+            self.status_var.set("Durduruluyor…")
+
     def _choose_folder(self):
         folder = filedialog.askdirectory(title="PDF Klasörü Seç")
         if folder:
@@ -187,6 +213,7 @@ class PdfAraApp(tk.Tk):
             self.status_var.set("")
             self.listbox.delete(0, tk.END)
             self.result_files.clear()
+            self.progress["value"] = 0
 
     def _get_terms(self) -> list[str]:
         terms = []
@@ -199,6 +226,13 @@ class PdfAraApp(tk.Tk):
     # ------------------------------------------------------------------
     # Arama
     # ------------------------------------------------------------------
+    def _on_search_button(self):
+        """Ara/Durdur butonuna basıldığında çağrılır."""
+        if self._search_thread and self._search_thread.is_alive():
+            self._request_cancel()
+        else:
+            self._start_search()
+
     def _start_search(self):
         if not FITZ_OK:
             messagebox.showerror(
@@ -216,14 +250,14 @@ class PdfAraApp(tk.Tk):
             messagebox.showwarning("Terim Girilmedi", "En az bir arama terimi girin.")
             return
 
-        # Önceki sonuçları temizle
         self.listbox.delete(0, tk.END)
         self.result_files.clear()
         self.status_var.set("Aranıyor…")
-        self.btn_search.config(state="disabled")
+        self.progress["value"] = 0
+        self._cancel_event.clear()
+        self._set_searching_state(True)
         self.update_idletasks()
 
-        # Arama ayrı thread'de (UI donmasın)
         self._search_thread = threading.Thread(
             target=self._search_worker,
             args=(self.selected_folder, terms),
@@ -243,11 +277,17 @@ class PdfAraApp(tk.Tk):
                 return
 
             matches: list[str] = []
+            errors = 0
             total = len(pdf_files)
 
             for i, filename in enumerate(pdf_files):
-                self.after(0, self.status_var.set,
-                           f"Taraniyor… {i + 1}/{total}: {filename}")
+                if self._cancel_event.is_set():
+                    self.after(0, self._search_done, matches, i, total,
+                               f"Durduruldu. ({i}/{total} tarandı, "
+                               f"{len(matches)} eşleşme bulundu)", True)
+                    return
+
+                self.after(0, self._update_progress, i, total, filename)
                 filepath = os.path.join(folder, filename)
                 try:
                     fitz.TOOLS.mupdf_warnings()
@@ -260,23 +300,33 @@ class PdfAraApp(tk.Tk):
                         matches.append(filepath)
                 except Exception:
                     fitz.TOOLS.mupdf_warnings()
+                    errors += 1
 
             if matches:
                 msg = f"{len(matches)} / {total} PDF eşleşti. Çift tıkla aç."
             else:
                 msg = f"Eşleşen PDF bulunamadı. ({total} dosya tarandı)"
+            if errors:
+                msg += f"  [{errors} dosya okunamadı]"
 
-            self.after(0, self._search_done, matches, msg)
+            self.after(0, self._search_done, matches, total, total, msg, False)
 
         except Exception as exc:
-            self.after(0, self._search_done, [], f"Hata: {exc}")
+            self.after(0, self._search_done, [], 0, 0, f"Hata: {exc}", False)
 
-    def _search_done(self, matches: list[str], msg: str):
+    def _update_progress(self, current: int, total: int, filename: str):
+        self.progress["maximum"] = total
+        self.progress["value"] = current
+        self.status_var.set(f"Taraniyor… {current + 1}/{total}: {filename}")
+
+    def _search_done(self, matches: list[str], done: int, total: int,
+                     msg: str, cancelled: bool):
         self.result_files = matches
         for filepath in matches:
             self.listbox.insert(tk.END, f"  {os.path.basename(filepath)}")
+        self.progress["value"] = done
         self.status_var.set(msg)
-        self.btn_search.config(state="normal")
+        self._set_searching_state(False)
 
     # ------------------------------------------------------------------
     # Dosya Açma
